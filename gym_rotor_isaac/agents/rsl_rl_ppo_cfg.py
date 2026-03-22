@@ -1,6 +1,11 @@
 from isaaclab.utils import configclass
 
-from isaaclab_rl.rsl_rl import RslRlOnPolicyRunnerCfg, RslRlPpoActorCriticCfg, RslRlPpoAlgorithmCfg
+from isaaclab_rl.rsl_rl import (
+    RslRlOnPolicyRunnerCfg,
+    RslRlPpoActorCriticCfg,
+    RslRlPpoAlgorithmCfg,
+    RslRlMLPModelCfg,
+)
 
 
 @configclass
@@ -16,6 +21,41 @@ class GymRotorPPORunnerCfg(RslRlOnPolicyRunnerCfg):
         actor_hidden_dims=[256, 256, 128],
         critic_hidden_dims=[256, 256, 128],
         activation="elu",
+    )
+    algorithm = RslRlPpoAlgorithmCfg(
+        value_loss_coef=1.0,
+        use_clipped_value_loss=True,
+        clip_param=0.2,
+        entropy_coef=0.01,
+        num_learning_epochs=5,
+        num_mini_batches=4,
+        learning_rate=3.0e-4,
+        schedule="adaptive",
+        gamma=0.99,
+        lam=0.95,
+        desired_kl=0.01,
+        max_grad_norm=1.0,
+    )
+
+
+@configclass
+class GymRotorEMLPPPORunnerCfg(RslRlOnPolicyRunnerCfg):
+    """Phase 2: Equivariant EMLP actor/critic configuration."""
+    num_steps_per_env = 24
+    max_iterations = 500
+    save_interval = 50
+    experiment_name = "gymrotor_emlp"
+    actor = RslRlMLPModelCfg(
+        class_name="gym_rotor_isaac.agents.emlp_actor:EMLPActor",
+        hidden_dims=[16],           # EMLP hidden channel count
+        activation="elu",           # Ignored by EMLP wrapper
+        obs_normalization=False,
+    )
+    critic = RslRlMLPModelCfg(
+        class_name="gym_rotor_isaac.agents.emlp_critic:EMLPCritic",
+        hidden_dims=[62],           # EMLP hidden channel count
+        activation="elu",           # Ignored by EMLP wrapper
+        obs_normalization=False,
     )
     algorithm = RslRlPpoAlgorithmCfg(
         value_loss_coef=1.0,
