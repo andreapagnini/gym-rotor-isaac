@@ -56,6 +56,10 @@ class EMLPActor(nn.Module):
         # Extract device from obs
         self.device = obs["policy"].device
 
+        # Store obs_groups for TensorDict extraction
+        self.obs_groups = obs_groups[obs_set]  # ["policy"]
+        self.obs_dim = sum(obs[g].shape[-1] for g in self.obs_groups)
+
         # Extract hidden_dim from hidden_dims list (rsl_rl passes a list)
         if hidden_dims is None:
             hidden_dim = 16  # Default from args_parse.py
@@ -73,12 +77,14 @@ class EMLPActor(nn.Module):
             log_std=kwargs.get('init_log_std', 0.0)
         )
 
+        # Warmup forward pass to trigger any lazy initialization with normal tensors
+        # (prevents inference tensor issues when first forward happens under inference_mode)
+        dummy_obs = torch.zeros((1, self.obs_dim), device=self.device)
+        with torch.no_grad():
+            _ = self._emlp.get_dist(dummy_obs)
+
         # Distribution storage (populated by forward())
         self._distribution: Normal | None = None
-
-        # Store obs_groups for TensorDict extraction
-        self.obs_groups = obs_groups[obs_set]  # ["policy"]
-        self.obs_dim = sum(obs[g].shape[-1] for g in self.obs_groups)
 
     def _make_args(self, num_actions: int, hidden_dim: int):
         """Synthesize args namespace for EMLP constructor."""
@@ -111,8 +117,19 @@ class EMLPActor(nn.Module):
         # Extract flat tensor from TensorDict
         obs_flat = torch.cat([obs[g] for g in self.obs_groups], dim=-1)
 
+        # Clone to detach from inference_mode (rollout obs stored as inference tensors)
+        obs_flat = obs_flat.clone()
+
         # Get distribution from EMLP
-        self._distribution = self._emlp.get_dist(obs_flat)
+        # Force enable_grad to override inference_mode during rollout
+        with torch.enable_grad():
+            emlp_dist = self._emlp.get_dist(obs_flat)
+
+        # Clone mean and std to convert inference tensors to regular tensors
+        # (needed because rsl_rl uses torch.inference_mode() during rollout)
+        mean = emlp_dist.mean.clone()
+        std = emlp_dist.stddev.clone()
+        self._distribution = Normal(mean, std)
 
         if stochastic_output:
             return self._distribution.sample()

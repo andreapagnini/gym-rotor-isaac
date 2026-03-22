@@ -55,6 +55,10 @@ class EMLPCritic(nn.Module):
         # Extract device from obs
         self.device = obs["policy"].device
 
+        # Store obs_groups for TensorDict extraction
+        self.obs_groups = obs_groups[obs_set]  # ["policy"]
+        self.obs_dim = sum(obs[g].shape[-1] for g in self.obs_groups)
+
         # Extract hidden_dim from hidden_dims list (rsl_rl passes a list)
         if hidden_dims is None:
             hidden_dim = 62  # Default from args_parse.py
@@ -71,9 +75,11 @@ class EMLPCritic(nn.Module):
             hidden_num=hidden_num
         )
 
-        # Store obs_groups for TensorDict extraction
-        self.obs_groups = obs_groups[obs_set]  # ["policy"]
-        self.obs_dim = sum(obs[g].shape[-1] for g in self.obs_groups)
+        # Warmup forward pass to trigger any lazy initialization with normal tensors
+        # (prevents inference tensor issues when first forward happens under inference_mode)
+        dummy_obs = torch.zeros((1, self.obs_dim), device=self.device)
+        with torch.no_grad():
+            _ = self._emlp(dummy_obs)
 
     def _make_args(self, hidden_dim: int):
         """Synthesize args namespace for EMLP constructor."""
@@ -103,8 +109,13 @@ class EMLPCritic(nn.Module):
         # Extract flat tensor from TensorDict
         obs_flat = torch.cat([obs[g] for g in self.obs_groups], dim=-1)
 
+        # Clone to detach from inference_mode (rollout obs stored as inference tensors)
+        obs_flat = obs_flat.clone()
+
         # Get value from EMLP
-        return self._emlp(obs_flat)
+        # Force enable_grad to override inference_mode during rollout
+        with torch.enable_grad():
+            return self._emlp(obs_flat)
 
     # No-ops for non-recurrent models
     def reset(self, dones: torch.Tensor | None = None) -> None:
